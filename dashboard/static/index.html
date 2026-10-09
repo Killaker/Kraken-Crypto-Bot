@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bot · Kraken Convert</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="trend-toasts" class="trend-toasts"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand__dot" id="conn-dot"></span>
+      <span class="brand__name">TRADING BOT</span>
+      <span class="brand__sep">/</span>
+      <span class="brand__exchange" id="exchange-label">KRAKEN</span>
+    </div>
+    <div class="topbar__meta">
+      <div class="meta-chip" id="chip-mode">—</div>
+      <div class="meta-chip" id="chip-net">—</div>
+      <div class="meta-chip" id="chip-tf">—</div>
+      <div class="meta-chip meta-chip--btc" id="chip-btc-eur" title="Precio BTC/EUR en vivo (Kraken)">BTC/EUR —</div>
+      <div class="clock" id="clock">--:--:--</div>
+    </div>
+  </header>
+
+  <main class="grid">
+
+    <section class="panel panel--balance">
+      <div class="panel__label">Balance disponible</div>
+      <div class="balance__value" id="balance-value">0.00</div>
+      <div class="balance__unit" id="balance-unit">BITCOIN</div>
+    </section>
+
+    <section class="panel panel--dd">
+      <div class="panel__label">Drawdown diario</div>
+      <div class="dd__row">
+        <div class="dd__value" id="dd-value">0.00%</div>
+        <div class="dd__limit">límite <span id="dd-limit">5.00%</span></div>
+      </div>
+      <div class="dd__track"><div class="dd__fill" id="dd-fill"></div></div>
+      <div class="kill-badge" id="kill-badge">NORMAL</div>
+      <button class="kill-reset-btn" id="kill-reset-btn" style="display:none">Resetear kill-switch</button>
+      <div class="entries-badge" id="entries-badge">ENTRADAS ACTIVAS</div>
+      <button class="entries-toggle-btn" id="entries-toggle-btn">Pausar nuevas entradas</button>
+    </section>
+
+    <section class="panel panel--config">
+      <div class="panel__label">Configuración de riesgo</div>
+      <dl class="config-list">
+        <div><dt>Riesgo/trade</dt><dd id="cfg-risk">—</dd></div>
+        <div><dt>Máx. posiciones</dt><dd id="cfg-maxpos">—</dd></div>
+        <div><dt>Estrategias</dt><dd id="cfg-strats">—</dd></div>
+      </dl>
+      <div class="panel__label" style="margin-top:12px">Activar / desactivar</div>
+      <div id="strategy-toggles" class="strategy-toggles"></div>
+      <div class="panel__label" style="margin-top:12px">Monedas — permitir nuevas entradas</div>
+      <div id="symbol-toggles" class="strategy-toggles"></div>
+    </section>
+
+    <section class="panel panel--tickers">
+      <div class="panel__label">Precios en vivo</div>
+      <table class="table" id="tickers-table">
+        <thead>
+          <tr><th>Símbolo</th><th>Último</th><th>24h %</th><th>Bid</th><th>Ask</th></tr>
+        </thead>
+        <tbody id="tickers-body">
+          <tr class="empty-row"><td colspan="5">Esperando datos…</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel panel--positions">
+      <div class="panel__label">Posiciones abiertas <span class="count" id="positions-count">0</span></div>
+      <table class="table" id="positions-table">
+        <thead>
+          <tr>
+            <th>Símbolo</th><th>Lado</th><th>Qty</th>
+            <th title="Precio de la cripto en el instante de apertura. Queda congelado: no se mueve con BTC/EUR ni con el mercado.">Entrada</th>
+            <th title="Precio actual de la cripto. El EUR usa la tasa BTC/EUR en vivo; el BTC es el par nativo.">Actual</th>
+            <th title="Rentabilidad NETA en EUR (incluye el movimiento de la moneda y el del BTC/EUR). El stop/TP/trailing siguen disparándose por el valor en BTC — pasa el ratón sobre cada fila para ver ambos.">PnL %</th>
+            <th>Trailing Stop</th><th>Estrategia</th><th>Acción</th>
+          </tr>
+        </thead>
+        <tbody id="positions-body">
+          <tr class="empty-row"><td colspan="9">Sin posiciones abiertas</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel panel--logs">
+      <div class="panel__label">Actividad reciente</div>
+      <div class="logs" id="logs-list"></div>
+    </section>
+
+  </main>
+
+  <footer class="statusbar">
+    <span id="status-text">Conectando…</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
