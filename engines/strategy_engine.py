@@ -405,6 +405,14 @@ class StrategyEngine:
         try:
             order = await self._execution_engine.process_signal(signal, atr_value)
             if order:
+                # Notificar a la estrategia que la entrada quedó confirmada
+                # (si emitió una apertura en vuelo propia, como el registro
+                # de triángulos de TRIANGULAR_ARB). Si el cierre falló o no
+                # hubo fill, liberar igualmente para permitir reintentos.
+                strategy = self._strategies.get(signal.strategy_id)
+                on_registered = getattr(strategy, "on_position_registered", None)
+                if callable(on_registered):
+                    on_registered(signal.symbol)
                 logger.info(
                     "strategy_engine.order_executed",
                     symbol=signal.symbol,

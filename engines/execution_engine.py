@@ -111,6 +111,33 @@ class ExecutionEngine:
             )
         return filters
 
+    def _trailing_profit_delta(self, entry_price: Decimal, activation_price: Decimal) -> Decimal:
+        """
+        Delta (en unidades de precio) del trailing stop ARMADO con el nuevo
+        campo `Position.trailing_stop_delta_profit`.
+
+        CORREGIDO — fuente principal de las "grandes pérdidas" pese a
+        señales ganadoras: el trailing usaba como delta la distancia
+        completa entry↔stop (p.ej. 2×ATR ≈ 1.4%). Una vez activado el
+        trailing (precio ≈ +0.95% sobre entry), un retroceso de ruido
+        normal dejaba el stop armado en ≈ entry - 0.45% → cierre con
+        pérdida NETA garantizada (comisiones aparte). Ahora el delta es
+        justo la distancia que queda entre la activación y el entry más el
+        margen neto configurado: cualquier cierre por trailing ocurre a
+        ≥ entry × (1 + round_trip_fee + min_net_profit) → beneficio neto
+        REAL, nunca pérdida. El stop_loss ATR original sigue siendo la
+        protección bajista intacta durante toda la vida de la posición.
+        """
+        floor_price = entry_price * (
+            Decimal("1")
+            + Decimal(str(self._settings.round_trip_fee_pct))
+            + Decimal(str(self._settings.min_net_profit_pct))
+        )
+        delta = activation_price - floor_price
+        if delta <= 0:  # redondeo extremo: usar directamente el margen mínimo
+            delta = activation_price - entry_price
+        return delta
+
     # ── Precio en tiempo real ─────────────────────────────────────────
 
     def update_price(self, symbol: str, price: Decimal) -> None:
@@ -214,12 +241,25 @@ class ExecutionEngine:
         # por lo que el stop mínimo también se reduce proporcionalmente.
         # Se mantiene la lógica de ensanche para que la distancia de riesgo
         # sea al menos la mitad de la distancia mínima de beneficio exigida.
+        #
+        # CORREGIDO: además de la mitad del coste, el stop NUNCA puede
+        # quedar DENTRO de la zona de activación del trailing (entry +
+        # coste_total×1.1). Con el stop anterior (coste×0.7 ≈ 0.63%) y una
+        # vela que sube +0.5% y retrocede ruido normal, el precio podía
+        # tocar el stop por debajo del entry → cierre con pérdida neta sin
+        # que el trailing llegara nunca a armarse. Ahora el stop queda
+        # desplazado por debajo de la activación: si el trailing no llega a
+        # armar, el stop solo salta ante una caída real más profunda que el
+        # margen de beneficio exigido — no ante oscilación estéril.
         total_cost_pct = (
             self._settings.round_trip_fee_pct
             + self._settings.min_net_profit_pct
             + self._settings.slippage_buffer_pct
         )
         min_risk_pct = Decimal(str(total_cost_pct)) * Decimal("1.4") * Decimal("0.5")
+        trailing_floor_pct = Decimal(str(total_cost_pct)) * Decimal("1.1")
+        if min_risk_pct <= trailing_floor_pct:
+            min_risk_pct = trailing_floor_pct * Decimal("1.1")
         current_risk_pct = abs(entry_price - stop) / entry_price if entry_price > 0 else Decimal("0")
         if current_risk_pct < min_risk_pct:
             if signal.direction == SignalDirection.LONG:
@@ -307,9 +347,20 @@ class ExecutionEngine:
         # sea al menos 2x el coste total CON colchón, para que un TP
         # implícito (trailing) tenga margen real de cubrir comisiones antes
         # de tocar el stop.
+        #
+        # CORREGIDO: este filtro se evalúa ANTES de que _open_long aplique
+        # su ensanche mínimo del stop — con el umbral antiguo (coste×1.4×2 =
+        # 1.85% de riesgo) se rechazaban señales cuyo stop, tras el ensanche
+        # automático, habría quedado perfectamente fuera de la zona muerta
+        # del trailing (stop mínimo real = coste×1.21 ≈ 1.6%). Ahora se
+        # exige exactamente ese suelo: riesgo >= stop_mínimo_real(×1.05 por
+        # tolerancia de float). Las señales con riesgo aún más estrecho se
+        # siguen rechazando — no se relaja nada que pueda cerrar en pérdida
+        # por diseño; solo deja de rechazar por error lo que es correcto.
         if stop_loss > 0:
             risk = abs(entry_price - stop_loss) / entry_price
-            if Decimal(str(risk)) > required_reward * 2:
+            min_required_risk = Decimal(str(total_cost)) * Decimal("1.21")
+            if Decimal(str(risk)) >= min_required_risk * Decimal("1.05"):
                 return True
 
         logger.info(
@@ -385,12 +436,24 @@ class ExecutionEngine:
             stop_loss=stop,
             take_profit=getattr(signal, "take_profit", None),
             trailing_stop_delta=trailing_delta,
+            trailing_stop_delta_profit=self._trailing_profit_delta(entry_price, trailing_activation),
             trailing_activation_price=trailing_activation,
             strategy_id=signal.strategy_id,
             entry_eur=entry_eur,
             entry_btc_eur_rate=entry_btc_eur_rate,
         )
         await self._risk_manager.register_position(position)
+        # NUEVO: sincronizar el wallet REAL con el capital realmente
+        # consumido por la entrada (coste + fee de 1 leg). Antes
+        # `_account_balance` en RiskManager solo se refrescaba al CERRAR,
+        # así que tras varias aperturas seguía creyendo que casi todo el
+        # capital original estaba libre: el sizing de señales nuevas salía
+        # inflado y execution_engine rechazaba las aperturas reales por
+        # fondos insuficientes (o, peor, el límite duro
+        # max_position_notional_pct dejaba de ser duro porque medía contra
+        # un balance fantasma). Ver sync_balance.
+        if not self._settings.is_live:
+            await self._risk_manager.sync_balance(self._paper_balance)
         return order
 
     async def _wait_for_fill(self, order_id: str, pair: str, timeout_s: int) -> bool:
@@ -459,8 +522,24 @@ class ExecutionEngine:
         # movimiento bruto ya cubre el coste total del round-trip directo
         # (2 legs); los cierres por precio real (stop/trailing/take_profit)
         # se ejecutan siempre.
+        #
+        # CORREGIDO: esta compuerta NO debe bloquear un cierre cuando la
+        # posición YA superó su take_profit en algún momento. El TP es el
+        # objetivo que la propia estrategia diseñó (con margen sobre
+        # comisiones): si el precio lo tocó y luego retrocedió por debajo
+        # del umbral de costes antes de que el tick procesara el cierre,
+        # bloquear aquí obligaba a seguir arrastrando la posición hasta el
+        # timeout de 24h — cristalizándola después en pérdida neta de fees
+        # (el peor caso: ganancia alcanzada y tirada a la basura). Con la
+        # compuerta activa indefinidamente, cada señal de convergencia no
+        # rentable repetía este mismo bloqueo vela tras vela.
         exit_reason = (signal.metadata or {}).get("exit_reason")
-        if exit_reason is not None and exit_reason not in self._PRICE_EXIT_REASONS:
+        tp_ever_reached = (
+            position.take_profit is not None
+            and position.take_profit > 0
+            and position.current_price >= position.take_profit
+        )
+        if exit_reason is not None and exit_reason not in self._PRICE_EXIT_REASONS and not tp_ever_reached:
             total_cost_pct = (
                 self._settings.round_trip_fee_pct
                 + self._settings.min_net_profit_pct
@@ -592,8 +671,9 @@ class ExecutionEngine:
         self._paper_positions[symbol] = qty
         asyncio.create_task(self._risk_manager.sync_balance(self._paper_balance))
 
-        # Usar la distancia real entry↔stop (ATR de la estrategia) como delta
-        # del trailing; activar solo cuando el precio ya cubre el coste total.
+        # Usar la distancia real entry↔stop (ATR de la estrategia) como
+        # respaldo del trailing; activar solo cuando el precio ya cubre el
+        # coste total.
         trailing_delta = abs(entry_price - stop)
         total_cost_pct = (
             self._settings.round_trip_fee_pct
@@ -610,6 +690,7 @@ class ExecutionEngine:
             stop_loss=stop,
             take_profit=getattr(signal, "take_profit", None),
             trailing_stop_delta=trailing_delta,
+            trailing_stop_delta_profit=self._trailing_profit_delta(entry_price, trailing_activation),
             trailing_activation_price=trailing_activation,
             strategy_id=signal.strategy_id,
             entry_eur=entry_eur,

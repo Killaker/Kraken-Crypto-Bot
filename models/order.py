@@ -142,6 +142,17 @@ class Position:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     signal_id: str = ""
 
+    # CORREGIDO: antes el trailing usaba como delta la distancia completa
+    # entry↔stop (ATR de riesgo, p.ej. -1.4%). Con el trailing ya armado
+    # tras cubrir el coste (~+0.95%), un retroceso de RUIDO NORMAL (0.5%)
+    # cerraba la posición con bruto ≈ +0.5% — por debajo del round-trip
+    # fee (0.52%) — es decir, PÉRDIDA NETA ASEGURADA. Visto en log: "8 de
+    # los últimos 10 cierres" cortados así. El delta ahora es independiente
+    # del stop: solo retrocesos realmente anormales disparan el cierre, y
+    # cualquier cierre por trailing queda garantizado en beneficio neto
+    # (ver ExecutionEngine._paper_open / _execute_direct_entry).
+    trailing_stop_delta_profit: Optional[Decimal] = None
+
     @property
     def notional(self) -> Decimal:
         return self.qty * self.current_price
@@ -180,11 +191,18 @@ class Position:
         if self.trailing_stop_delta is None:
             return False
 
+        # Delta del trailing: el nuevo "profit delta" si está configurado
+        # (garantiza beneficio neto al cortar), con fallback al delta
+        # antiguo por compatibilidad.
+        delta = self.trailing_stop_delta_profit
+        if delta is None or delta <= 0:
+            delta = self.trailing_stop_delta
+
         moved = False
         if self.side == PositionSide.LONG:
             if self.trailing_activation_price is not None and price < self.trailing_activation_price:
                 return False
-            new_stop = price - self.trailing_stop_delta
+            new_stop = price - delta
             floor = self.stop_loss if self.stop_loss is not None else new_stop
             if new_stop > floor and (self.trailing_stop_price is None or new_stop > self.trailing_stop_price):
                 self.trailing_stop_price = new_stop
@@ -192,7 +210,7 @@ class Position:
         elif self.side == PositionSide.SHORT:
             if self.trailing_activation_price is not None and price > self.trailing_activation_price:
                 return False
-            new_stop = price + self.trailing_stop_delta
+            new_stop = price + delta
             ceiling = self.stop_loss if self.stop_loss is not None else new_stop
             if new_stop < ceiling and (self.trailing_stop_price is None or new_stop < self.trailing_stop_price):
                 self.trailing_stop_price = new_stop

@@ -71,6 +71,12 @@ class TriangularArbStrategy(BaseStrategy):
         # estrategia, qué triángulo (ref_symbol) está operando cada
         # símbolo mientras la posición sigue abierta.
         self._open_refs: dict[str, str] = {}
+        # NUEVO: cola de aperturas pendientes — la posición REAL solo se
+        # registra cuando el ExecutionEngine confirma el fill. Si no se
+        # filtrara, la propia señal de apertura (emitida con position=None)
+        # volvería a evaluarse en la siguiente vela como si aún no hubiera
+        # posición y abriría una segunda entrada encima de la primera.
+        self._pending_open: set[str] = set()
 
         self.min_candles = max(self._lookback, self._atr_period, self._REF_TREND_EMA * 2) + 20
 
@@ -84,6 +90,37 @@ class TriangularArbStrategy(BaseStrategy):
 
     def set_data_engine(self, data_engine) -> None:
         self._data_engine = data_engine
+
+    def on_position_registered(self, symbol: str) -> None:
+        """
+        Callback invocado por StrategyEngine cuando el ExecutionEngine
+        confirmó el fill de una entrada de esta estrategia. Libera la marca
+        "apertura en vuelo" para que las siguientes velas evalúen solo la
+        SALIDA (gestión del triángulo), no otra entrada encima.
+        """
+        self._pending_open.discard(symbol)
+
+    def _infer_reference_for_position(
+        self, symbol: str, target_closes: np.ndarray
+    ) -> Optional[str]:
+        """
+        Reconstruye qué REF usar para gestionar una posición cuya apertura
+        no se registró en `_open_refs` (p.ej. posición huérfana tras un
+        reinicio del bot). Elige el candidato con mayor |z-score| válido,
+        el mismo criterio que en la apertura.
+        """
+        best_ref: Optional[str] = None
+        best_abs_z = 0.0
+        for ref_symbol in self._all_symbols:
+            if ref_symbol == symbol:
+                continue
+            z = self._ratio_zscore(symbol, ref_symbol, target_closes)
+            if z is None:
+                continue
+            if abs(z) > best_abs_z:
+                best_abs_z = abs(z)
+                best_ref = ref_symbol
+        return best_ref
 
     # ─────────────────────────────────────────────────────────────────
 
@@ -113,11 +150,36 @@ class TriangularArbStrategy(BaseStrategy):
         # triángulo (guardado en metadata al abrir), no recorrer todos de
         # nuevo.
         if position and position.is_open:
+            # La posición REAL ya existe → la apertura en vuelo (si aún
+            # figuraba) quedó confirmada; liberarla para que los estados
+            # internos de la estrategia queden coherentes.
+            self._pending_open.discard(symbol)
             ref_symbol = self._open_refs.get(symbol)
             if not ref_symbol:
-                return None
+                # CORREGIDO: esta posición NO se abrió en esta sesión del
+                # bot (p.ej. el bot se reinició con la posición ya abierta
+                # y `self._open_refs` es memoria volátil). Sin saber qué
+                # REF usó, era imposible evaluar su convergencia — la
+                # posición quedaba sin gestión de salida por estrategia
+                # hasta el timeout de 24h. Se reconstruye el REF óptimo
+                # recorriendo los candidatos como haría en la apertura; si
+                # ninguno da z-score, se sale por seguridad liberando el
+                # capital (el stop/TP genéricos siguen siendo la red de
+                # protección mientras tanto).
+                ref_symbol = self._infer_reference_for_position(symbol, target_closes)
+                if not ref_symbol:
+                    return Signal(
+                        strategy_id=self.strategy_id,
+                        symbol=symbol,
+                        direction=SignalDirection.CLOSE_LONG,
+                        entry_price=current_price,
+                        stop_loss=current_price,
+                        confidence=0.5,
+                        metadata={"exit_reason": "triangular_ref_unknown"},
+                    )
+                self._open_refs[symbol] = ref_symbol
             z = self._ratio_zscore(symbol, ref_symbol, target_closes)
-            if z is not None and abs(z) < self._exit_zscore:
+            if abs(z) < self._exit_zscore:
                 self._open_refs.pop(symbol, None)
                 return Signal(
                     strategy_id=self.strategy_id,
@@ -134,6 +196,11 @@ class TriangularArbStrategy(BaseStrategy):
         # cruce más desalineado (mayor |z-score|), no el primero que
         # cumpla el umbral — así el "triángulo" operado es siempre el
         # mejor disponible en ese instante, entre todos los posibles.
+        # NUEVO: si ya hay una apertura EN VUELO para este símbolo (señal
+        # emitida la vela anterior, aún sin fill confirmado), no volver a
+        # emitir otra — evitar doble posición por la misma estrategia.
+        if symbol in self._pending_open:
+            return None
         best_ref: Optional[str] = None
         best_z = 0.0
         best_edge = 0.0  # unidades de precio TARGET (hacia la media del ratio)
@@ -217,6 +284,7 @@ class TriangularArbStrategy(BaseStrategy):
         )
 
         self._open_refs[symbol] = best_ref
+        self._pending_open.add(symbol)
         signal = Signal(
             strategy_id=self.strategy_id,
             symbol=symbol,
