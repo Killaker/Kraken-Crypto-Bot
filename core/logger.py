@@ -16,6 +16,16 @@ from typing import Any, Callable, Optional
 
 import structlog
 
+# Detectar la carpeta raíz real donde se está ejecutando el script o el .exe
+if getattr(sys, 'frozen', False):
+    # Si es un ejecutable comprimido por PyInstaller
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    # Si se está ejecutando el script .py normal en desarrollo
+    # Sube un nivel si logger.py está dentro de una subcarpeta (ej. 'utils/logger.py')
+    # Si logger.py está en la raíz, usa simplemente: os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # Hook opcional inyectado por dashboard/server.py para reflejar cada evento
 # en el buffer que consume la UI web, sin acoplar core.logger al dashboard.
 _dashboard_sink: Optional[Callable[..., None]] = None
@@ -29,7 +39,7 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # desde ahí). Se restaura la ruta original como default; sigue siendo
 # posible sobreescribirla con la variable de entorno BOT_LOG_FILE si se
 # quiere mover a otra ubicación.
-_LOG_FILE = os.environ.get("BOT_LOG_FILE", r"C:\Users\ema\Desktop\KrakenDirecto.txt")
+_LOG_FILE = os.environ.get("BOT_LOG_FILE", os.path.join(BASE_DIR, "KrakenDirecto.txt"))
 
 
 def register_dashboard_sink(sink: Callable[..., None]) -> None:

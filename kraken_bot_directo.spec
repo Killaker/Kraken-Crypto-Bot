@@ -139,5 +139,5 @@ exe = EXE(
     strip=False,
     upx=True,
     console=True,
-    icon=r"C:\Users\ema\Desktop\Bot Trading Crypto Directo\Kraken.ico",
+    icon="Kraken.ico",
 )
