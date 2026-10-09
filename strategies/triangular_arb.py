@@ -60,6 +60,7 @@ class TriangularArbStrategy(BaseStrategy):
         self._lookback = settings.tri_lookback
         self._min_zscore = settings.tri_min_zscore
         self._exit_zscore = settings.tri_exit_zscore
+        self._momentum = settings.entry_mode.upper() == "MOMENTUM"
         self._atr_period = settings.atr_period
         self._atr_multiplier = settings.atr_multiplier
         self._all_symbols = list(settings.trading_symbols)
@@ -221,6 +222,8 @@ class TriangularArbStrategy(BaseStrategy):
             z = self._zscore_from_arrays(tgt_closes, ref_closes)
             if z is None:
                 continue
+            if self._momentum and z <= 0:
+                continue
             if abs(z) > abs(best_z):
                 # Filtro de contagio: evitar "atrapar cuchillos" si REF
                 # también está en caída fuerte propia — igual criterio que
@@ -229,15 +232,19 @@ class TriangularArbStrategy(BaseStrategy):
                 ref_trend_down = (
                     not np.isnan(ref_ema_arr[-1]) and ref_closes[-1] < ref_ema_arr[-1] * 0.98
                 )
-                if z < 0 and ref_trend_down:
+                if not self._momentum and z < 0 and ref_trend_down:
                     continue
                 best_z = z
                 best_ref = ref_symbol
                 ratio = tgt_closes / ref_closes
                 mean_ratio = float(np.mean(ratio[-self._lookback:]))
-                best_edge = mean_ratio * float(ref_closes[-1]) - float(current_price)
+                best_edge = (
+                    float(current_price) - mean_ratio * float(ref_closes[-1])
+                    if self._momentum
+                    else mean_ratio * float(ref_closes[-1]) - float(current_price)
+                )
 
-        if best_ref is None or abs(best_z) < self._min_zscore or best_z >= 0 or atr_value <= 0:
+        if best_ref is None or abs(best_z) < self._min_zscore or (best_z < 0 if self._momentum else best_z >= 0) or atr_value <= 0:
             # Solo se opera el lado LONG (TARGET infravalorado); best_z<0
             # requerido. Igual que el resto de estrategias direccionales
             # del bot — el SHORT no está habilitado en modo paper/LONG-only.

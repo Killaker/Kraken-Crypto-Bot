@@ -269,6 +269,10 @@ class Settings(BaseSettings):
         ]
     )
 
+    # Modo de entrada de MEAN_REVERSION y TRIANGULAR_ARB:
+    # CONTRARIAN = compra caídas (z<0); MOMENTUM = compra subidas (z>0)
+    entry_mode: str = "MOMENTUM"
+
     # Estrategia A — Mean Reversion
     mr_vwap_window: int = 20
     mr_zscore_threshold: float = 1.8

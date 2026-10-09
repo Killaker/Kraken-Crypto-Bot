@@ -76,6 +76,7 @@ class MeanReversionStrategy(BaseStrategy):
         self._bb_std = settings.mr_bb_std
         self._atr_period = settings.atr_period
         self._atr_multiplier = settings.atr_multiplier
+        self._momentum = settings.entry_mode.upper() == "MOMENTUM"
 
         # Mínimo de velas = max de todos los períodos + margen
         self.min_candles = max(self._vwap_window, self._bb_period, self._atr_period) + 20
@@ -220,9 +221,48 @@ class MeanReversionStrategy(BaseStrategy):
         vwap_dec = Decimal(str(vwap_price))
         atr_stop_dist = atr_dec * Decimal(str(self._atr_multiplier))
 
-        # ── SEÑAL LONG ───────────────────────────────────────────────────────
+        # ── SEÑAL LONG (MOMENTUM): compra fuerza, z>0 y precio en banda superior ──
         if (
-            zscore < -self._zscore_threshold
+            self._momentum
+            and zscore > self._zscore_threshold
+            and percent_b > self._BB_UPPER_THRESHOLD
+        ):
+            ext = current_price - vwap_dec
+            if ext < self._min_tp_distance(current_price):
+                return None
+            stop_loss = current_price - atr_stop_dist
+            take_profit = current_price + ext
+            strength = self._classify_strength(abs(zscore))
+            confidence = self._calculate_confidence(zscore, 1.0 - percent_b, volume_ratio, "LONG")
+            signal = Signal(
+                strategy_id=self.strategy_id,
+                symbol=symbol,
+                direction=SignalDirection.LONG,
+                entry_price=current_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                strength=strength,
+                confidence=confidence,
+                metadata={"zscore": float(zscore), "percent_b": float(percent_b), "mode": "MOMENTUM"},
+            )
+            logger.info(
+                "strategy.signal_generated",
+                strategy=self.strategy_id,
+                symbol=symbol,
+                direction="LONG",
+                mode="MOMENTUM",
+                zscore=f"{zscore:.3f}",
+                percent_b=f"{percent_b:.3f}",
+                entry=str(current_price),
+                stop=str(stop_loss),
+                tp=str(take_profit),
+            )
+            return signal
+
+        # ── SEÑAL LONG (CONTRARIAN) ──────────────────────────────────────────
+        if (
+            not self._momentum
+            and zscore < -self._zscore_threshold
             and percent_b < self._BB_LOWER_THRESHOLD
         ):
             # CORREGIDO: el stop a 2×ATR quedaba dentro del rango normal de
@@ -311,10 +351,11 @@ class MeanReversionStrategy(BaseStrategy):
         # (visible en el log como el mismo CLOSE_LONG repetido cada pocos
         # segundos para el mismo símbolo).
         if position is not None and position.is_open and not np.isnan(prev_zscore):
-            if (
-                prev_zscore < -self._EXIT_ZSCORE
-                and zscore >= -self._EXIT_ZSCORE
-            ):
+            if self._momentum:
+                crossed = prev_zscore > self._EXIT_ZSCORE and zscore <= self._EXIT_ZSCORE
+            else:
+                crossed = prev_zscore < -self._EXIT_ZSCORE and zscore >= -self._EXIT_ZSCORE
+            if crossed:
                 # Precio ha revertido: cerrar LONG
                 return Signal(
                     strategy_id=self.strategy_id,
