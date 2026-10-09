@@ -9,6 +9,7 @@ INTRO
 - Lanza interfaz web local en http://127.0.0.1:8001 para monitorear precios en vivo de BTC y de todos los pares usados, posiciones abiertas, balance disponible, estrategias y monedas activas, drawdown diario y log.
 - Botones para activar/desactivar tanto estrategias como monedas usadas, pausa/reanudacion de nuevas aperturas de posiciones, cerrar manualmente posiciones abiertas, reseteo de kill-switch al sobrepasar el drawdown diario.
 - Marcadores en verde/rojo junto a las posiciones abiertas para indicar cuando reportan perdidas o ganancias netas teniendo en cuenta las comisiones y tasas por intercambio de Kraken.
+- Notificacion mediante pop-up de cuando una moneda entra en una tendencia alcista/bajista.
 - Todo el funcionamiento y monitoreo es completamente en tiempo real.
 
 PREPARACION
@@ -32,3 +33,8 @@ OPCION B(Compilar .exe):
 - Ejecutar "pyinstaller" usando el archivo "kraken_bot_directo.spec"
 - Copiar el .exe creado en la carpeta "dist" a la raiz del proyecto junto al archivo ".env"
 - Lanzar el .exe
+
+ADVERTENCIA
+---------------
+
+- Por defecto el bot se conecta en modo "PAPER" para hacer pruebas con dinero ficticio/virtual con un balance de 0.03 BTC, para usar tu saldo real de Kraken cambiar en el archivo ".env" la variable "BOT_MODE=PAPER" a "BOT_MODE=LIVE"

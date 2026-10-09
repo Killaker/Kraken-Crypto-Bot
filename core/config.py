@@ -109,8 +109,8 @@ class Settings(BaseSettings):
     use_testnet: bool = False  # Kraken no tiene testnet público estable; ver nota en README.
 
     # ── Credenciales Kraken ───────────────────────────────────────────────────
-    kraken_api_key: str = "WOQ594urM70bPZ2IBNr665ni6jMGrinYUXU0C68zaZgVqMePUvcxRZn5"
-    kraken_api_secret: str = "iqwV0ADF1taXppylIAl1UjK4YT0ZE+U1Tzu7FJ/J9AKi1SM7CCwDndoM+MnrOZu+TdKDqrR3ByytkjgPbS/Z6Q=="
+    kraken_api_key: str = ""
+    kraken_api_secret: str = ""
 
     # ── Activo base de conversión ────────────────────────────────────────────
     # Activo cripto que el bot mantiene "en reposo" y que actúa como activo
